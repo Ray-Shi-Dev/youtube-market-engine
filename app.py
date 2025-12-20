@@ -281,7 +281,10 @@ def process_channel_logic(api_key, channel_id, v_limit, threshold_mult, days_bac
     return []
 
 def run_market_scan(topic, api_key, max_ch, vid_limit, mult, days, region_code):
-    """Reusable function: Scans a topic and returns the DataFrame + Score + Stats."""
+    """
+    Reusable function: Scans a topic and returns the DataFrame + Score + Stats.
+    UPDATED: Now returns Median Multiplier and Shark Count for better Battle insights.
+    """
     try:
         yt = build('youtube', 'v3', developerKey=api_key)
         
@@ -339,7 +342,9 @@ def run_market_scan(topic, api_key, max_ch, vid_limit, mult, days, region_code):
             "score": score,
             "channels": len(channel_ids),
             "outliers": len(df),
-            "top_mult": df['performance'].max() if not df.empty else 0
+            "top_mult": df['performance'].max() if not df.empty else 0,
+            "median_mult": df['performance'].median() if not df.empty else 0, # <--- NEW
+            "shark_count": len(df[df['Verdict'].str.contains("Shark", na=False)]) # <--- NEW
         }, None
 
     except Exception as e:
@@ -508,17 +513,50 @@ with tab2:
                 c_chart, c_metrics = st.columns([2, 1])
                 
                 with c_chart:
-                    # Side by Side Bar Chart
+                    # UPDATED: Side by Side Bar Chart with more metrics (Median & Shark Count)
                     comp_data = pd.DataFrame({
-                        'Topic': [t1, t1, t1, t2, t2, t2],
-                        'Metric': ['Score', 'Outliers', 'Viral Max', 'Score', 'Outliers', 'Viral Max'],
-                        'Value': [res1['score'], res1['outliers'], res1['top_mult'], res2['score'], res2['outliers'], res2['top_mult']]
+                        'Topic': [
+                            t1, t1, t1, t1,
+                            t2, t2, t2, t2
+                        ],
+                        'Metric': [
+                            'Score', 'Total Outliers', 'Median Viral (x10)', 'Shark Count',
+                            'Score', 'Total Outliers', 'Median Viral (x10)', 'Shark Count'
+                        ],
+                        'Value': [
+                            res1['score'], res1['outliers'], res1['median_mult']*10, res1['shark_count'],
+                            res2['score'], res2['outliers'], res2['median_mult']*10, res2['shark_count']
+                        ]
                     })
-                    fig_comp = px.bar(comp_data, x="Metric", y="Value", color="Topic", barmode="group", title="Head-to-Head Stats", text_auto=True)
+                    
+                    fig_comp = px.bar(
+                        comp_data, 
+                        x="Metric", 
+                        y="Value", 
+                        color="Topic", 
+                        barmode="group", 
+                        title="Head-to-Head Stats", 
+                        text_auto=True,
+                        color_discrete_sequence=["#3b82f6", "#ef553b"] # Blue vs Red
+                    )
                     st.plotly_chart(fig_comp, use_container_width=True)
                 
                 with c_metrics:
                     st.subheader("Key Stats")
                     st.metric(f"{t1} Score", res1['score'])
                     st.metric(f"{t2} Score", res2['score'])
-                    st.caption(f"viral max x10 for scale")
+                    
+                    st.divider()
+                    
+                    # INSIGHTS LOGIC
+                    # 1. Volume Check
+                    if res1['outliers'] > res2['outliers'] * 1.5:
+                        st.info(f"**{t1}** is a deeper market (More videos).")
+                    elif res2['outliers'] > res1['outliers'] * 1.5:
+                        st.info(f"**{t2}** is a deeper market (More videos).")
+                        
+                    # 2. Saturation Check (The Shark Warning)
+                    if res1['shark_count'] > res2['shark_count']:
+                        st.warning(f"**{t1}** is more saturated with Giants.")
+                    elif res2['shark_count'] > res1['shark_count']:
+                        st.warning(f"**{t2}** is more saturated with Giants.")
