@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.express as px
 from googleapiclient.discovery import build
 import concurrent.futures
+from datetime import datetime, timedelta # --- NEW: Required for date math
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
@@ -47,6 +48,10 @@ with st.sidebar:
     videos_per_channel = st.slider("Videos per Channel", 10, 50, 30, help="How far back to look?")
     outlier_multiplier = st.slider("Outlier Threshold", 1.5, 5.0, 3.0, step=0.5, help="3.0 means 3x higher views than average")
     
+    # --- NEW: Date Filter Slider ---
+    st.divider()
+    days_back = st.slider("Look Back Period (Days)", 30, 365, 90, help="90 for Trends, 365 for Evergreen")
+    
     st.info("💡 **Tip:** Higher 'Channels to Scan' takes longer. 5 is a good balance.")
 
 # --- HELPER FUNCTIONS ---
@@ -76,8 +81,9 @@ def get_channel_basics(youtube, channel_id):
     except:
         return None
 
-def get_videos(youtube, playlist_id, limit):
-    """Fetches video statistics from the uploads playlist."""
+# --- UPDATED: Accepts days_back ---
+def get_videos(youtube, playlist_id, limit, days_back):
+    """Fetches video statistics from the uploads playlist, filtering by date."""
     videos = []
     try:
         # 1. Get Video IDs
@@ -99,6 +105,16 @@ def get_videos(youtube, playlist_id, limit):
         stats_res = stats_req.execute()
         
         for item in stats_res['items']:
+            # --- NEW: Date Filtering Logic ---
+            pub_date_str = item['snippet']['publishedAt']
+            # Parse format: 2023-10-27T10:00:00Z
+            pub_date = datetime.strptime(pub_date_str, "%Y-%m-%dT%H:%M:%SZ")
+            
+            # Skip if older than days_back
+            if (datetime.now() - pub_date).days > days_back:
+                continue
+            # ---------------------------------
+
             videos.append({
                 'title': item['snippet']['title'],
                 'published': item['snippet']['publishedAt'],
@@ -110,7 +126,8 @@ def get_videos(youtube, playlist_id, limit):
         pass
     return videos
 
-def process_channel_logic(api_key, channel_id, v_limit, threshold_mult):
+# --- UPDATED: Accepts days_back ---
+def process_channel_logic(api_key, channel_id, v_limit, threshold_mult, days_back):
     """
     The 'Worker' function. 
     Connects to YouTube, gets data, calculates math, returns ONLY outliers.
@@ -122,8 +139,8 @@ def process_channel_logic(api_key, channel_id, v_limit, threshold_mult):
         info = get_channel_basics(yt, channel_id)
         if not info: return []
         
-        # 2. Get Videos
-        videos = get_videos(yt, info['uploads'], v_limit)
+        # 2. Get Videos (Pass days_back)
+        videos = get_videos(yt, info['uploads'], v_limit, days_back)
         if not videos: return []
         
         # 3. Calculate Math
@@ -197,8 +214,9 @@ if run_btn:
             all_outliers = []
             
             with concurrent.futures.ThreadPoolExecutor() as executor:
+                # --- UPDATED: Pass days_back to the worker ---
                 futures = [
-                    executor.submit(process_channel_logic, api_key, cid, videos_per_channel, outlier_multiplier) 
+                    executor.submit(process_channel_logic, api_key, cid, videos_per_channel, outlier_multiplier, days_back) 
                     for cid in channel_ids
                 ]
                 
@@ -216,10 +234,9 @@ if run_btn:
                 # Apply Competition Logic
                 final_df['Competition'] = final_df['subs'].apply(assign_competition_level)
                 
-                # --- NEW FIX: FILTERING LOGIC ---
+                # --- FILTERING LOGIC ---
                 
                 # 1. Remove "News Spam": If High Competition, require > 50k views
-                # This removes Yahoo Finance videos with 16k views that look like outliers
                 mask_news_spam = (final_df['Competition'] == "High (>1M)") & (final_df['views'] < 50000)
                 final_df = final_df[~mask_news_spam]
                 
@@ -232,7 +249,7 @@ if run_btn:
                 # -------------------------------
                 
                 if final_df.empty:
-                    st.warning("No outliers found after filtering for quality (Spam filter active).")
+                    st.warning(f"No outliers found in the last {days_back} days. Try increasing the Look Back Period or lowering the threshold.")
                 else:
                     st.divider()
                     
@@ -252,7 +269,7 @@ if run_btn:
                         size="views",
                         color="Competition",
                         hover_data=["title", "views", "channel"],
-                        title="Outlier Intensity vs Competition Level",
+                        title=f"Outlier Intensity ({days_back} Days Look Back)",
                         labels={"performance": "Viral Multiplier (x Average)", "published": "Date"},
                         color_discrete_map={
                             "Very Low (<100k)": "#00CC96",
