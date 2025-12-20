@@ -6,7 +6,7 @@ from googleapiclient.discovery import build
 import concurrent.futures
 from datetime import datetime, timedelta
 from collections import Counter
-import math # <--- NEW: Required for Logarithmic Scoring
+import math # <--- NEW: Required for Logarithmic Math
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
@@ -95,7 +95,7 @@ def calculate_niche_score(df, total_channels):
     # 1. Opportunity Density (0-50 pts)
     # How many "Gold Mines" did we find? 
     # Log scale: 1 gold mine = 15pts, 3 = 30pts, 10+ = 50pts
-    gold_mines = len(df[df['Verdict'].str.contains("Gold")])
+    gold_mines = len(df[df['Verdict'].str.contains("Gold", na=False)])
     score_density = 0
     if gold_mines > 0:
         score_density = min(50, 15 * math.log(gold_mines + 1, 1.5))
@@ -110,9 +110,10 @@ def calculate_niche_score(df, total_channels):
     
     # 3. Competition Penalty (Subtract up to 20 pts)
     # If more than 50% of results are Sharks, subtract points
-    sharks = len(df[df['Verdict'].str.contains("Shark")])
+    sharks = len(df[df['Verdict'].str.contains("Shark", na=False)])
     total = len(df)
-    if total > 0 and (sharks / total) > 0.5:
+    
+    if total > 0 and (sharks / total > 0.5):
         score_density -= 10
         score_viral -= 10
     
