@@ -6,6 +6,7 @@ from googleapiclient.discovery import build
 import concurrent.futures
 from datetime import datetime, timedelta
 from collections import Counter
+import math # <--- NEW: Required for Logarithmic Scoring
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
@@ -86,26 +87,36 @@ def assign_verdict(row):
 
 def calculate_niche_score(df, total_channels):
     """
-    NEW STRICTER FORMULA (0-100)
-    1. Opportunity Ratio (50%): What % of the outliers are 'Low Competition'?
-    2. Viral Intensity (50%): How high is the average multiplier?
+    NEW 'VIDIQ-STYLE' LOGARITHMIC FORMULA (0-100)
+    Uses Logarithmic scaling so it's hard to hit 100.
     """
     if df.empty: return 0
     
-    # 1. Opportunity Ratio (Max 50 pts)
-    # We want niches where Small Channels (Low Comp) are winning.
-    low_comp_count = len(df[df['Competition'].str.contains("Very Low")])
-    total_outliers = len(df)
-    opportunity_ratio = low_comp_count / total_outliers
-    score_opportunity = opportunity_ratio * 50
+    # 1. Opportunity Density (0-50 pts)
+    # How many "Gold Mines" did we find? 
+    # Log scale: 1 gold mine = 15pts, 3 = 30pts, 10+ = 50pts
+    gold_mines = len(df[df['Verdict'].str.contains("Gold")])
+    score_density = 0
+    if gold_mines > 0:
+        score_density = min(50, 15 * math.log(gold_mines + 1, 1.5))
     
-    # 2. Viral Intensity (Max 50 pts)
-    # We cap the multiplier at 10x. If avg is 10x, you get full 50pts.
-    avg_mult = df['performance'].mean()
-    score_viral = min(50, (avg_mult / 10) * 50)
+    # 2. Viral Intensity (0-50 pts)
+    # What is the Median Multiplier of the winners?
+    # Log scale: 2x = 10pts, 5x = 30pts, 20x = 50pts
+    avg_mult = df['performance'].median()
+    score_viral = 0
+    if avg_mult > 1:
+        score_viral = min(50, 12 * math.log(avg_mult, 1.4))
     
-    # Total Score
-    final_score = int(score_opportunity + score_viral)
+    # 3. Competition Penalty (Subtract up to 20 pts)
+    # If more than 50% of results are Sharks, subtract points
+    sharks = len(df[df['Verdict'].str.contains("Shark")])
+    total = len(df)
+    if total > 0 and (sharks / total) > 0.5:
+        score_density -= 10
+        score_viral -= 10
+    
+    final_score = int(score_density + score_viral)
     return max(0, min(100, final_score))
 
 # --- VISUAL HELPERS ---
@@ -364,19 +375,31 @@ with tab1:
                 st.subheader("🗺️ The Strategy Legend")
                 st.info("Use this guide to understand the table below:")
                 
+                # CSS Grid for Strategy Cards (Fixed Colors)
                 st.markdown(f"""
                 <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px;">
-                    <div style="flex: 1; background-color: #e6f4ea; padding: 15px; border-radius: 10px; border-left: 5px solid #00cc96;">
+                    <!-- Gold Mine -->
+                    <div style="flex: 1; background-color: #e6f4ea; padding: 15px; border-radius: 10px; border-left: 5px solid #00cc96; color: #1f2937;">
                         <h4 style="margin:0; color: #008000;">💎 Gold Mine</h4>
-                        <small><b>Definition:</b> Small channel (<100k subs) + Massive Views.<br><b>Action:</b> Copy this Topic immediately.</small>
+                        <small><b>Small Channel + Huge Views.</b><br>High Priority: Copy Topic.</small>
                     </div>
-                    <div style="flex: 1; background-color: #e8f0fe; padding: 15px; border-radius: 10px; border-left: 5px solid #636efa;">
-                        <h4 style="margin:0; color: #1967d2;">🌟 Rising Star</h4>
-                        <small><b>Definition:</b> Small channel + Consistent Views.<br><b>Action:</b> Study their thumbnails.</small>
+                    
+                    <!-- Rising Star -->
+                    <div style="flex: 1; background-color: #e8f0fe; padding: 15px; border-radius: 10px; border-left: 5px solid #636efa; color: #1f2937;">
+                        <h4 style="margin:0; color: #1557b0;">🌟 Rising Star</h4>
+                        <small><b>Small Channel + Consistent.</b><br>Study their thumbnails.</small>
                     </div>
-                    <div style="flex: 1; background-color: #fce8e6; padding: 15px; border-radius: 10px; border-left: 5px solid #ef553b;">
+
+                    <!-- Mainstream Wave (Added) -->
+                    <div style="flex: 1; background-color: #fff8e1; padding: 15px; border-radius: 10px; border-left: 5px solid #ffa15a; color: #1f2937;">
+                        <h4 style="margin:0; color: #bf5b04;">🌊 Mainstream</h4>
+                        <small><b>Big Trend.</b><br>Hard to compete, but high traffic.</small>
+                    </div>
+                    
+                    <!-- Shark Tank -->
+                    <div style="flex: 1; background-color: #fce8e6; padding: 15px; border-radius: 10px; border-left: 5px solid #ef553b; color: #1f2937;">
                         <h4 style="margin:0; color: #c5221f;">🦈 Shark Tank</h4>
-                        <small><b>Definition:</b> Giant channel (>1M subs) winning.<br><b>Action:</b> Avoid / Do not copy.</small>
+                        <small><b>Giant Channel Dominance.</b><br>Action: Avoid.</small>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
