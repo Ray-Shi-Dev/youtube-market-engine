@@ -18,10 +18,11 @@ st.markdown("""
 <style>
     .stButton>button { width: 100%; border-radius: 5px; height: 3em; font-weight: bold; }
     .metric-card { background-color: #f0f2f6; border-left: 5px solid #ff4b4b; padding: 15px; border-radius: 5px; }
-    /* NEW: Tag Spider Chip Styling */
+    
+    /* Tag Spider Chip Styling */
     .tag-container {
         background-color: #ffffff;
-        color: #333333; /* <--- FIX: Force text color to dark grey for visibility */
+        color: #333333;
         padding: 8px 12px;
         border-radius: 20px;
         text-align: center;
@@ -30,6 +31,11 @@ st.markdown("""
         font-size: 0.9em;
         box-shadow: 0 1px 3px rgba(0,0,0,0.05);
     }
+
+    /* NEW: Verdict Colors */
+    .verdict-gold { color: #008000; font-weight: bold; }
+    .verdict-star { color: #DAA520; font-weight: bold; }
+    .verdict-shark { color: #B22222; font-weight: bold; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -65,7 +71,7 @@ with st.sidebar:
     st.divider()
     days_back = st.slider("Look Back Period (Days)", 30, 365, 90, help="90 for Trends, 365 for Evergreen")
     
-    st.info("💡 **Tip:** Use the 'Discovered Niches' below to refine your next search!")
+    st.info("💡 **Tip:** Use the 'Niche Health' score below to validate your idea!")
 
 # --- HELPER FUNCTIONS ---
 
@@ -74,6 +80,41 @@ def assign_competition_level(subs):
     if subs < 100000: return "Very Low (<100k)"
     if subs < 1000000: return "Medium (<1M)"
     return "High (>1M)"
+
+def assign_verdict(row):
+    """NEW: Automatically classifies the opportunity type."""
+    comp = row['Competition']
+    perf = row['performance']
+    
+    if "Very Low" in comp:
+        if perf > 5.0: return "💎 Gold Mine"
+        return "🌟 Rising Star"
+    elif "Medium" in comp:
+        if perf > 5.0: return "✅ Good Bet"
+        return "⚖️ Neutral"
+    else: # High Comp
+        if perf > 10.0: return "🌊 Mainstream Wave"
+        return "🦈 Shark Tank (Avoid)"
+
+def calculate_niche_score(df, total_channels):
+    """NEW: Calculates a 0-100 score for the niche."""
+    # Base score
+    score = 50 
+    
+    # 1. Reward Low Competition Outliers
+    low_comp_count = len(df[df['Competition'].str.contains("Very Low")])
+    score += (low_comp_count * 10)
+    
+    # 2. Reward High Viral Intensity
+    avg_multiplier = df['performance'].mean()
+    score += (avg_multiplier * 2)
+    
+    # 3. Penalize High Competition Saturation
+    high_comp_count = len(df[df['Competition'].str.contains("High")])
+    score -= (high_comp_count * 5)
+    
+    # Cap between 0 and 100
+    return max(0, min(100, int(score)))
 
 def get_channel_basics(youtube, channel_id):
     """Fetches basic channel info and the Uploads Playlist ID."""
@@ -237,45 +278,57 @@ if run_btn:
             
             status.update(label="Analysis Complete!", state="complete", expanded=False)
             
-            # Step 3: Show Results
+            # Step 3: Show Results (DECISION ENGINE UPDATE)
             if all_outliers:
                 final_df = pd.DataFrame(all_outliers)
-                
-                # Apply Competition Logic
                 final_df['Competition'] = final_df['subs'].apply(assign_competition_level)
                 
-                # --- FILTERING LOGIC ---
-                
-                # 1. Remove "News Spam": If High Competition, require > 50k views
+                # Filter News Spam
                 mask_news_spam = (final_df['Competition'] == "High (>1M)") & (final_df['views'] < 50000)
                 final_df = final_df[~mask_news_spam]
                 
-                # 2. Sort by Performance
+                # Sort & Diversity Filter
                 final_df = final_df.sort_values('performance', ascending=False)
-                
-                # 3. Apply "Diversity Filter": Keep only top 2 videos per channel
                 final_df = final_df.groupby('channel').head(2).sort_values('performance', ascending=False)
                 
-                # -------------------------------
-                
                 if final_df.empty:
-                    st.warning(f"No outliers found in the last {days_back} days. Try increasing the Look Back Period or lowering the threshold.")
+                    st.warning(f"No quality outliers found in the last {days_back} days.")
                 else:
+                    # --- NEW: APPLY DECISION LOGIC ---
+                    final_df['Verdict'] = final_df.apply(assign_verdict, axis=1)
+                    niche_score = calculate_niche_score(final_df, len(channel_ids))
                     
-                    # --- TAG SPIDER 🕷️ ---
+                    # --- NEW: DISPLAY NICHE HEALTH ---
+                    st.divider()
+                    st.subheader("📊 Niche Health Report")
+                    
+                    c1, c2, c3 = st.columns(3)
+                    
+                    # Score Color Logic
+                    score_color = "red"
+                    if niche_score > 50: score_color = "orange"
+                    if niche_score > 75: score_color = "green"
+                    
+                    c1.markdown(f"### Niche Score: <span style='color:{score_color}'>{niche_score}/100</span>", unsafe_allow_html=True)
+                    if niche_score > 75:
+                        c1.caption("✅ Excellent opportunity. Lots of Green Dots.")
+                    elif niche_score > 50:
+                        c1.caption("⚠️ Good potential, specific angles needed.")
+                    else:
+                        c1.caption("❌ High competition / Low viral interest.")
+
+                    c2.metric("Channels Scanned", len(channel_ids))
+                    c3.metric("Outliers Found", len(final_df))
+                    
+                    # --- TAG SPIDER (Keep existing) ---
                     st.divider()
                     st.subheader("🕸️ Discovered Niches (Common Tags)")
-                    st.write("The outliers above are using these specific tags. **Try searching these next:**")
                     
-                    # Flatten tags list
                     all_tags = [tag.lower() for row in final_df['tags'] for tag in row]
-                    # Filter out the search term itself so it doesn't clutter (case insensitive)
                     filtered_tags = [t for t in all_tags if topic_input.lower() not in t]
                     
                     if filtered_tags:
                         common_tags = Counter(filtered_tags).most_common(12)
-                        
-                        # Display as chips using columns
                         cols = st.columns(4)
                         for i, (tag, count) in enumerate(common_tags):
                             cols[i % 4].markdown(f"<div class='tag-container'>{tag} ({count})</div>", unsafe_allow_html=True)
@@ -284,40 +337,42 @@ if run_btn:
 
                     st.divider()
                     
-                    # Top Level Metrics
-                    m1, m2, m3 = st.columns(3)
-                    m1.metric("Channels Analyzed", len(channel_ids))
-                    m2.metric("Outliers Found", len(final_df))
-                    m3.metric("Top Multiplier", f"{final_df['performance'].max():.1f}x")
-                    
-                    # Scatter Plot
+                    # --- VISUALIZATION (Updated Colors) ---
                     st.subheader(f"💎 The '{topic_input}' Gold Mine")
+                    st.caption("Look for Gold Mines (Low Comp, High Viral).")
                     
                     fig = px.scatter(
                         final_df,
                         x="published",
                         y="performance",
                         size="views",
-                        color="Competition",
+                        color="Verdict", # <--- UPDATED: Colors by Verdict
                         hover_data=["title", "views", "channel"],
-                        title=f"Outlier Intensity ({days_back} Days Look Back)",
-                        labels={"performance": "Viral Multiplier (x Average)", "published": "Date"},
+                        title="Opportunity Landscape",
+                        labels={"performance": "Viral Multiplier", "published": "Date"},
                         color_discrete_map={
-                            "Very Low (<100k)": "#00CC96",
-                            "Medium (<1M)": "#636EFA",
-                            "High (>1M)": "#EF553B"
+                            "💎 Gold Mine": "#00CC96",      # Green
+                            "🌟 Rising Star": "#636EFA",    # Blue
+                            "✅ Good Bet": "#AB63FA",       # Purple
+                            "🌊 Mainstream Wave": "#FFA15A", # Orange
+                            "🦈 Shark Tank (Avoid)": "#EF553B" # Red
                         }
                     )
                     st.plotly_chart(fig, use_container_width=True)
                     
-                    # Detailed Table
-                    st.subheader("📋 Top Opportunities List")
+                    # --- TABLE (Updated Columns) ---
+                    st.subheader("📋 Ranked Opportunities")
+                    
+                    # Move Verdict to front of table
+                    cols_to_show = ['Verdict', 'title', 'channel', 'views', 'performance', 'url']
+                    
                     st.dataframe(
-                        final_df[['title', 'channel', 'Competition', 'views', 'performance', 'url']],
+                        final_df[cols_to_show],
                         column_config={
-                            "url": st.column_config.LinkColumn("Watch Video"),
+                            "url": st.column_config.LinkColumn("Watch"),
                             "performance": st.column_config.NumberColumn("Multiplier", format="%.1fx"),
-                            "views": st.column_config.NumberColumn("Views", format="%d")
+                            "views": st.column_config.NumberColumn("Views", format="%d"),
+                            "Verdict": st.column_config.TextColumn("Verdict")
                         },
                         hide_index=True
                     )
