@@ -1,12 +1,11 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
+import plotly.graph_objects as go # <--- NEW: Required for Gauge Charts
 from googleapiclient.discovery import build
 import concurrent.futures
 from datetime import datetime, timedelta
 from collections import Counter
-import math # <--- NEW: Required for Logarithmic Math
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
@@ -86,41 +85,54 @@ def assign_verdict(row):
         return "🦈 Shark Tank (Avoid)"
 
 def calculate_niche_score(df, total_channels):
-    """
-    NEW 'VIDIQ-STYLE' LOGARITHMIC FORMULA (0-100)
-    Uses Logarithmic scaling so it's hard to hit 100.
-    """
-    if df.empty: return 0
+    """Calculates a 0-100 score for the niche."""
+    # Base score
+    score = 50 
     
-    # 1. Opportunity Density (0-50 pts)
-    # How many "Gold Mines" did we find? 
-    # Log scale: 1 gold mine = 15pts, 3 = 30pts, 10+ = 50pts
-    gold_mines = len(df[df['Verdict'].str.contains("Gold", na=False)])
-    score_density = 0
-    if gold_mines > 0:
-        score_density = min(50, 15 * math.log(gold_mines + 1, 1.5))
+    # 1. Reward Low Competition Outliers
+    low_comp_count = len(df[df['Competition'].str.contains("Very Low")])
+    score += (low_comp_count * 10)
     
-    # 2. Viral Intensity (0-50 pts)
-    # What is the Median Multiplier of the winners?
-    # Log scale: 2x = 10pts, 5x = 30pts, 20x = 50pts
-    avg_mult = df['performance'].median()
-    score_viral = 0
-    if avg_mult > 1:
-        score_viral = min(50, 12 * math.log(avg_mult, 1.4))
+    # 2. Reward High Viral Intensity
+    avg_multiplier = df['performance'].mean()
+    score += (avg_multiplier * 2)
     
-    # 3. Competition Penalty (Subtract up to 20 pts)
-    # If more than 50% of results are Sharks, subtract points
-    sharks = len(df[df['Verdict'].str.contains("Shark", na=False)])
-    total = len(df)
+    # 3. Penalize High Competition Saturation
+    high_comp_count = len(df[df['Competition'].str.contains("High")])
+    score -= (high_comp_count * 5)
     
-    if total > 0 and (sharks / total > 0.5):
-        score_density -= 10
-        score_viral -= 10
-    
-    final_score = int(score_density + score_viral)
-    return max(0, min(100, final_score))
+    # Cap between 0 and 100
+    return max(0, min(100, int(score)))
 
-# --- VISUAL HELPERS ---
+# --- NEW VISUAL HELPERS ---
+
+def create_gauge_chart(score):
+    """Generates a professional speedometer style gauge for the score."""
+    fig = go.Figure(go.Indicator(
+        mode = "gauge+number",
+        value = score,
+        domain = {'x': [0, 1], 'y': [0, 1]},
+        title = {'text': "Niche Opportunity Score", 'font': {'size': 24}},
+        gauge = {
+            'axis': {'range': [0, 100], 'tickwidth': 1, 'tickcolor': "darkblue"},
+            'bar': {'color': "darkblue"},
+            'bgcolor': "white",
+            'borderwidth': 2,
+            'bordercolor': "gray",
+            'steps': [
+                {'range': [0, 50], 'color': '#ffebec'},  # Red Zone
+                {'range': [50, 75], 'color': '#fff4e5'}, # Orange Zone
+                {'range': [75, 100], 'color': '#e6f4ea'} # Green Zone
+            ],
+            'threshold': {
+                'line': {'color': "red", 'width': 4},
+                'thickness': 0.75,
+                'value': score
+            }
+        }
+    ))
+    fig.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=20))
+    return fig
 
 def create_tag_chart(tags_list, topic):
     """Generates a horizontal bar chart for top tags."""
@@ -330,115 +342,80 @@ with tab1:
         if not api_key: st.error("⚠️ Please paste API Key in sidebar.")
         elif not topic_input: st.warning("Enter a topic.")
         else:
-            # Use spinner instead of status (Prevents the 'Click to Open' issue)
-            with st.spinner("Analyzing Market Data..."):
+            with st.status("Analyzing Market Data...", expanded=True) as status:
                 data, err = run_market_scan(topic_input, api_key, max_channels, videos_per_channel, outlier_multiplier, days_back, selected_region_code)
                 
-            if err:
-                st.error(err)
-            else:
-                final_df = data['df']
-                niche_score = data['score']
+                if err:
+                    status.update(label="Error", state="error")
+                    st.error(err)
+                else:
+                    status.update(label="Complete!", state="complete", expanded=False)
+                    final_df = data['df']
+                    niche_score = data['score']
 
-                # --- 1. DASHBOARD HEADER ---
-                st.divider()
-                
-                # Dynamic Score Color
-                score_color = "#ef553b" # Red
-                if niche_score > 50: score_color = "#ffa15a" # Orange
-                if niche_score > 75: score_color = "#00cc96" # Green
-                
-                c_score, c_info = st.columns([2, 3])
-                
-                with c_score:
-                    st.markdown(f"""
-                    <div style="text-align: center; border: 2px solid {score_color}; padding: 20px; border-radius: 10px;">
-                        <h2 style="margin:0; font-size: 3em; color: {score_color};">{niche_score}</h2>
-                        <p style="margin:0; font-weight: bold; opacity: 0.8;">Niche Opportunity Score</p>
-                    </div>
-                    """, unsafe_allow_html=True)
-                
-                with c_info:
-                    st.markdown("### 🔍 Quick Summary")
-                    if niche_score > 75:
-                        st.success("✅ **Excellent Market.** Lots of small channels are going viral here. Easy to enter.")
-                    elif niche_score > 50:
-                        st.warning("⚠️ **Moderate.** Some small channels are winning, but big channels dominate. Needs a unique angle.")
+                    # --- 1. DASHBOARD HEADER (GAUGE & METRICS) ---
+                    st.divider()
+                    col_gauge, col_stats = st.columns([1, 2])
+                    
+                    with col_gauge:
+                        # Professional Gauge Chart
+                        st.plotly_chart(create_gauge_chart(niche_score), use_container_width=True)
+                    
+                    with col_stats:
+                        st.subheader("📊 Market Health Check")
+                        # CSS Grid for Strategy Cards
+                        st.markdown(f"""
+                        <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px;">
+                            <div style="flex: 1; background-color: #e6f4ea; padding: 15px; border-radius: 10px; border-left: 5px solid #008000;">
+                                <h4 style="margin:0; color: #008000;">💎 Gold Mine</h4>
+                                <small>Small channel, Huge views.<br><b>Strategy: Copy This.</b></small>
+                            </div>
+                            <div style="flex: 1; background-color: #e8f0fe; padding: 15px; border-radius: 10px; border-left: 5px solid #1967d2;">
+                                <h4 style="margin:0; color: #1967d2;">🌟 Rising Star</h4>
+                                <small>Consistent growth.<br><b>Strategy: Study.</b></small>
+                            </div>
+                            <div style="flex: 1; background-color: #fce8e6; padding: 15px; border-radius: 10px; border-left: 5px solid #c5221f;">
+                                <h4 style="margin:0; color: #c5221f;">🦈 Shark Tank</h4>
+                                <small>Big channel dominance.<br><b>Strategy: Avoid.</b></small>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        
+                        m1, m2, m3 = st.columns(3)
+                        m1.metric("Channels", data['channels'])
+                        m2.metric("Outliers", data['outliers'])
+                        m3.metric("Top Multiplier", f"{data['top_mult']:.1f}x")
+
+                    # --- 2. TAG VISUALIZATION ---
+                    st.divider()
+                    all_tags = [tag.lower() for row in final_df['tags'] for tag in row]
+                    tag_chart = create_tag_chart(all_tags, topic_input)
+                    if tag_chart:
+                        st.plotly_chart(tag_chart, use_container_width=True)
                     else:
-                        st.error("❌ **Saturated.** Mostly dominated by giants. Very hard to get views.")
-                    
-                    m1, m2 = st.columns(2)
-                    m1.metric("Viral Outliers", data['outliers'], help="Number of videos performing significantly above average.")
-                    m2.metric("Top Multiplier", f"{data['top_mult']:.1f}x", help="The highest performing video got this many times more views than normal.")
+                        st.info("No hidden tags found in the top videos.")
 
-                # --- 2. STRATEGY CARDS (Legend) ---
-                st.write("") # Spacer
-                st.subheader("🗺️ The Strategy Legend")
-                st.info("Use this guide to understand the table below:")
-                
-                # CSS Grid for Strategy Cards (Fixed Colors)
-                st.markdown(f"""
-                <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px;">
-                    <!-- Gold Mine -->
-                    <div style="flex: 1; background-color: #e6f4ea; padding: 15px; border-radius: 10px; border-left: 5px solid #00cc96; color: #1f2937;">
-                        <h4 style="margin:0; color: #008000;">💎 Gold Mine</h4>
-                        <small><b>Small Channel + Huge Views.</b><br>High Priority: Copy Topic.</small>
-                    </div>
+                    # --- 3. SCATTER PLOT ---
+                    st.divider()
+                    fig = px.scatter(
+                        final_df, x="published", y="performance", size="views", color="Verdict",
+                        hover_data=["title", "channel"], title=f"💎 '{topic_input}' Opportunity Map",
+                        labels={"performance": "Viral Multiplier", "published": "Upload Date"},
+                        color_discrete_map={"💎 Gold Mine": "#00CC96", "🌟 Rising Star": "#636EFA", "✅ Good Bet": "#AB63FA", "🌊 Mainstream Wave": "#FFA15A", "🦈 Shark Tank (Avoid)": "#EF553B"}
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
                     
-                    <!-- Rising Star -->
-                    <div style="flex: 1; background-color: #e8f0fe; padding: 15px; border-radius: 10px; border-left: 5px solid #636efa; color: #1f2937;">
-                        <h4 style="margin:0; color: #1557b0;">🌟 Rising Star</h4>
-                        <small><b>Small Channel + Consistent.</b><br>Study their thumbnails.</small>
-                    </div>
-
-                    <!-- Mainstream Wave (Added) -->
-                    <div style="flex: 1; background-color: #fff8e1; padding: 15px; border-radius: 10px; border-left: 5px solid #ffa15a; color: #1f2937;">
-                        <h4 style="margin:0; color: #bf5b04;">🌊 Mainstream</h4>
-                        <small><b>Big Trend.</b><br>Hard to compete, but high traffic.</small>
-                    </div>
-                    
-                    <!-- Shark Tank -->
-                    <div style="flex: 1; background-color: #fce8e6; padding: 15px; border-radius: 10px; border-left: 5px solid #ef553b; color: #1f2937;">
-                        <h4 style="margin:0; color: #c5221f;">🦈 Shark Tank</h4>
-                        <small><b>Giant Channel Dominance.</b><br>Action: Avoid.</small>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-
-                # --- 3. SCATTER PLOT ---
-                st.divider()
-                st.subheader(f"💎 Opportunity Map: '{topic_input}'")
-                fig = px.scatter(
-                    final_df, x="published", y="performance", size="views", color="Verdict",
-                    hover_data=["title", "channel"],
-                    labels={"performance": "Viral Multiplier", "published": "Upload Date"},
-                    color_discrete_map={"💎 Gold Mine": "#00CC96", "🌟 Rising Star": "#636EFA", "✅ Good Bet": "#AB63FA", "🌊 Mainstream Wave": "#FFA15A", "🦈 Shark Tank (Avoid)": "#EF553B"}
-                )
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # --- 4. ACTIONABLE TABLE (With Tooltips) ---
-                st.subheader("📋 Ranked Video List")
-                st.dataframe(
-                    final_df[['Verdict', 'title', 'channel', 'views', 'performance', 'url']], 
-                    hide_index=True, 
-                    column_config={
-                        "url": st.column_config.LinkColumn("Link"), 
-                        "title": st.column_config.TextColumn("Video Title", width="large"),
-                        "views": st.column_config.NumberColumn("Views", help="Total views this video has received."),
-                        "performance": st.column_config.ProgressColumn(
-                            "Viral Power", 
-                            format="%.1f x", 
-                            min_value=0, 
-                            max_value=10,
-                            help="How many times BETTER this video did compared to the channel's average. 10x means it got 1000% more views than normal. Higher is better."
-                        ),
-                        "Verdict": st.column_config.TextColumn(
-                            "Verdict", 
-                            width="medium",
-                            help="Gold Mine = Best Opportunity. Shark Tank = High Competition."
-                        ),
-                    }
-                )
+                    # --- 4. ACTIONABLE TABLE ---
+                    st.subheader("📋 Ranked Video List")
+                    st.dataframe(
+                        final_df[['Verdict', 'title', 'channel', 'views', 'performance', 'url']], 
+                        hide_index=True, 
+                        column_config={
+                            "url": st.column_config.LinkColumn("Link"), 
+                            "performance": st.column_config.ProgressColumn("Viral Power", format="%.1f", min_value=0, max_value=10),
+                            "Verdict": st.column_config.TextColumn("Verdict", width="medium"),
+                        }
+                    )
 
 # ==========================================
 # TAB 2: VISUAL BATTLE (COMPARE)
