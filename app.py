@@ -3,7 +3,8 @@ import pandas as pd
 import plotly.express as px
 from googleapiclient.discovery import build
 import concurrent.futures
-from datetime import datetime, timedelta # --- NEW: Required for date math
+from datetime import datetime, timedelta
+from collections import Counter # --- NEW: Required for Tag Spider
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
@@ -17,6 +18,17 @@ st.markdown("""
 <style>
     .stButton>button { width: 100%; border-radius: 5px; height: 3em; font-weight: bold; }
     .metric-card { background-color: #f0f2f6; border-left: 5px solid #ff4b4b; padding: 15px; border-radius: 5px; }
+    /* NEW: Tag Spider Chip Styling */
+    .tag-container {
+        background-color: #ffffff;
+        padding: 8px 12px;
+        border-radius: 20px;
+        text-align: center;
+        margin-bottom: 10px;
+        border: 1px solid #e0e0e0;
+        font-size: 0.9em;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -52,7 +64,7 @@ with st.sidebar:
     st.divider()
     days_back = st.slider("Look Back Period (Days)", 30, 365, 90, help="90 for Trends, 365 for Evergreen")
     
-    st.info("💡 **Tip:** Higher 'Channels to Scan' takes longer. 5 is a good balance.")
+    st.info("💡 **Tip:** Use the 'Discovered Niches' below to refine your next search!")
 
 # --- HELPER FUNCTIONS ---
 
@@ -81,9 +93,9 @@ def get_channel_basics(youtube, channel_id):
     except:
         return None
 
-# --- UPDATED: Accepts days_back ---
+# --- UPDATED: Accepts days_back & Captures Tags ---
 def get_videos(youtube, playlist_id, limit, days_back):
-    """Fetches video statistics from the uploads playlist, filtering by date."""
+    """Fetches video statistics from the uploads playlist, filtering by date and getting tags."""
     videos = []
     try:
         # 1. Get Video IDs
@@ -97,7 +109,7 @@ def get_videos(youtube, playlist_id, limit, days_back):
         
         if not vid_ids: return []
 
-        # 2. Get Video Stats (Views)
+        # 2. Get Video Stats (Views & Tags)
         stats_req = youtube.videos().list(
             part="statistics,snippet",
             id=','.join(vid_ids)
@@ -105,21 +117,20 @@ def get_videos(youtube, playlist_id, limit, days_back):
         stats_res = stats_req.execute()
         
         for item in stats_res['items']:
-            # --- NEW: Date Filtering Logic ---
+            # --- Date Filtering Logic ---
             pub_date_str = item['snippet']['publishedAt']
-            # Parse format: 2023-10-27T10:00:00Z
             pub_date = datetime.strptime(pub_date_str, "%Y-%m-%dT%H:%M:%SZ")
             
             # Skip if older than days_back
             if (datetime.now() - pub_date).days > days_back:
                 continue
-            # ---------------------------------
 
             videos.append({
                 'title': item['snippet']['title'],
                 'published': item['snippet']['publishedAt'],
                 'views': int(item['statistics'].get('viewCount', 0)),
                 'channel': item['snippet']['channelTitle'],
+                'tags': item['snippet'].get('tags', []), # <--- NEW: Capture Tags
                 'url': f"https://www.youtube.com/watch?v={item['id']}"
             })
     except:
@@ -159,6 +170,7 @@ def process_channel_logic(api_key, channel_id, v_limit, threshold_mult, days_bac
         
         if not outliers.empty:
             outliers['performance'] = outliers['views'] / median_views
+            # Ensure tags are carried over
             return outliers.to_dict('records')
             
     except Exception:
@@ -210,7 +222,7 @@ if run_btn:
                 st.stop()
                 
             # Step 2: Parallel Analysis
-            status.write("⚡ Scanning video performance data (Parallel Processing)...")
+            status.write(f"⚡ Scanning video performance data (Last {days_back} Days)...")
             all_outliers = []
             
             with concurrent.futures.ThreadPoolExecutor() as executor:
@@ -251,6 +263,27 @@ if run_btn:
                 if final_df.empty:
                     st.warning(f"No outliers found in the last {days_back} days. Try increasing the Look Back Period or lowering the threshold.")
                 else:
+                    
+                    # --- NEW FEATURE: TAG SPIDER 🕷️ ---
+                    st.divider()
+                    st.subheader("🕸️ Discovered Niches (Common Tags)")
+                    st.write("The outliers above are using these specific tags. **Try searching these next:**")
+                    
+                    # Flatten tags list
+                    all_tags = [tag.lower() for row in final_df['tags'] for tag in row]
+                    # Filter out the search term itself so it doesn't clutter (case insensitive)
+                    filtered_tags = [t for t in all_tags if topic_input.lower() not in t]
+                    
+                    if filtered_tags:
+                        common_tags = Counter(filtered_tags).most_common(12)
+                        
+                        # Display as chips using columns
+                        cols = st.columns(4)
+                        for i, (tag, count) in enumerate(common_tags):
+                            cols[i % 4].markdown(f"<div class='tag-container'>{tag} ({count})</div>", unsafe_allow_html=True)
+                    else:
+                        st.caption("No unique tags found.")
+
                     st.divider()
                     
                     # Top Level Metrics
