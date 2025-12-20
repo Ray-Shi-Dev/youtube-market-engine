@@ -1,10 +1,12 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 from googleapiclient.discovery import build
 import concurrent.futures
 from datetime import datetime, timedelta
 from collections import Counter
+import math
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
@@ -16,7 +18,7 @@ st.set_page_config(
 # --- CSS STYLING ---
 st.markdown("""
 <style>
-    .stButton>button { width: 100%; border-radius: 5px; height: 3em; font-weight: bold; }
+    .stButton>button { border-radius: 5px; height: 3em; font-weight: bold; }
     .metric-card { background-color: #f0f2f6; border-left: 5px solid #ff4b4b; padding: 15px; border-radius: 5px; }
     
     /* Tag Spider Chip Styling */
@@ -71,7 +73,7 @@ with st.sidebar:
     st.divider()
     days_back = st.slider("Look Back Period (Days)", 30, 365, 90, help="90 for Trends, 365 for Evergreen")
     
-    st.info("💡 **Tip:** Check the 'How to read this report' section below for help!")
+    st.info("💡 **Tip:** Use 'Niche Battle' to compare two ideas!")
 
 # --- HELPER FUNCTIONS ---
 
@@ -97,24 +99,90 @@ def assign_verdict(row):
         return "🦈 Shark Tank (Avoid)"
 
 def calculate_niche_score(df, total_channels):
-    """Calculates a 0-100 score for the niche."""
-    # Base score
-    score = 50 
+    """
+    NEW 'VIDIQ-STYLE' LOGARITHMIC FORMULA (0-100)
+    Uses Logarithmic scaling so it's hard to hit 100.
+    """
+    if df.empty: return 0
     
-    # 1. Reward Low Competition Outliers
-    low_comp_count = len(df[df['Competition'].str.contains("Very Low")])
-    score += (low_comp_count * 10)
+    # 1. Opportunity Density (0-50 pts)
+    # How many "Gold Mines" did we find? 
+    # Log scale: 1 gold mine = 15pts, 3 = 30pts, 10+ = 50pts
+    gold_mines = len(df[df['Verdict'].str.contains("Gold", na=False)])
+    score_density = 0
+    if gold_mines > 0:
+        score_density = min(50, 15 * math.log(gold_mines + 1, 1.5))
     
-    # 2. Reward High Viral Intensity
-    avg_multiplier = df['performance'].mean()
-    score += (avg_multiplier * 2)
+    # 2. Viral Intensity (0-50 pts)
+    # What is the Median Multiplier of the winners?
+    # Log scale: 2x = 10pts, 5x = 30pts, 20x = 50pts
+    avg_mult = df['performance'].median()
+    score_viral = 0
+    if avg_mult > 1:
+        score_viral = min(50, 12 * math.log(avg_mult, 1.4))
     
-    # 3. Penalize High Competition Saturation
-    high_comp_count = len(df[df['Competition'].str.contains("High")])
-    score -= (high_comp_count * 5)
+    # 3. Competition Penalty (Subtract up to 20 pts)
+    # If more than 50% of results are Sharks, subtract points
+    sharks = len(df[df['Verdict'].str.contains("Shark", na=False)])
+    total = len(df)
     
-    # Cap between 0 and 100
-    return max(0, min(100, int(score)))
+    if total > 0 and (sharks / total > 0.5):
+        score_density -= 10
+        score_viral -= 10
+    
+    final_score = int(score_density + score_viral)
+    return max(0, min(100, final_score))
+
+# --- VISUAL HELPERS ---
+
+def create_gauge_chart(score):
+    """Generates a professional speedometer style gauge for the score."""
+    fig = go.Figure(go.Indicator(
+        mode = "gauge+number",
+        value = score,
+        domain = {'x': [0, 1], 'y': [0, 1]},
+        title = {'text': "Niche Opportunity Score", 'font': {'size': 24}},
+        gauge = {
+            'axis': {'range': [0, 100], 'tickwidth': 1, 'tickcolor': "darkblue"},
+            'bar': {'color': "darkblue"},
+            'bgcolor': "white",
+            'borderwidth': 2,
+            'bordercolor': "gray",
+            'steps': [
+                {'range': [0, 50], 'color': '#ffebec'},  # Red Zone
+                {'range': [50, 75], 'color': '#fff4e5'}, # Orange Zone
+                {'range': [75, 100], 'color': '#e6f4ea'} # Green Zone
+            ],
+            'threshold': {
+                'line': {'color': "red", 'width': 4},
+                'thickness': 0.75,
+                'value': score
+            }
+        }
+    ))
+    fig.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=20))
+    return fig
+
+def create_tag_chart(tags_list, topic):
+    """Generates a horizontal bar chart for top tags."""
+    # Filter out the topic itself
+    clean_tags = [t for t in tags_list if topic.lower() not in t]
+    
+    if not clean_tags: return None
+    
+    counts = Counter(clean_tags).most_common(10)
+    df_tags = pd.DataFrame(counts, columns=['Tag', 'Frequency'])
+    df_tags = df_tags.sort_values('Frequency', ascending=True)
+    
+    fig = px.bar(
+        df_tags, x='Frequency', y='Tag', orientation='h',
+        text='Frequency', title="🕸️ Top Related Keywords (Hidden Tags)",
+        color='Frequency', color_continuous_scale='Viridis'
+    )
+    fig.update_layout(yaxis={'title': ''}, xaxis={'title': 'Mentions'}, showlegend=False)
+    return fig
+
+# --- YOUTUBE API LOGIC ---
 
 def get_channel_basics(youtube, channel_id):
     """Fetches basic channel info and the Uploads Playlist ID."""
@@ -218,184 +286,243 @@ def process_channel_logic(api_key, channel_id, v_limit, threshold_mult, days_bac
         
     return []
 
+def run_market_scan(topic, api_key, max_ch, vid_limit, mult, days, region_code):
+    """Reusable function: Scans a topic and returns the DataFrame + Score + Stats."""
+    try:
+        yt = build('youtube', 'v3', developerKey=api_key)
+        
+        # 1. Search (With Region Filter)
+        search_args = {
+            'part': "snippet",
+            'q': topic,
+            'type': "channel",
+            'maxResults': max_ch,
+            'order': "relevance",
+            'relevanceLanguage': "en"
+        }
+        if region_code:
+            search_args['regionCode'] = region_code
+
+        search_req = yt.search().list(**search_args)
+        search_res = search_req.execute()
+        channel_ids = [item['snippet']['channelId'] for item in search_res['items']]
+        
+        if not channel_ids: return None, "No channels found."
+        
+        # 2. Parallel Scan
+        all_outliers = []
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = [
+                executor.submit(process_channel_logic, api_key, cid, vid_limit, mult, days) 
+                for cid in channel_ids
+            ]
+            for future in concurrent.futures.as_completed(futures):
+                res = future.result()
+                if res: all_outliers.extend(res)
+        
+        if not all_outliers: return None, "No outliers found."
+        
+        # 3. Process Data
+        df = pd.DataFrame(all_outliers)
+        df['Competition'] = df['subs'].apply(assign_competition_level)
+        
+        # Filter News Spam
+        mask_news = (df['Competition'] == "High (>1M)") & (df['views'] < 50000)
+        df = df[~mask_news]
+        
+        if df.empty: return None, "No quality outliers found (Spam Filter Active)."
+
+        # Sort & Diversity
+        df = df.sort_values('performance', ascending=False)
+        df = df.groupby('channel').head(2).sort_values('performance', ascending=False)
+        
+        # Calculate Scores
+        df['Verdict'] = df.apply(assign_verdict, axis=1)
+        score = calculate_niche_score(df, len(channel_ids))
+        
+        return {
+            "df": df,
+            "score": score,
+            "channels": len(channel_ids),
+            "outliers": len(df),
+            "top_mult": df['performance'].max() if not df.empty else 0
+        }, None
+
+    except Exception as e:
+        return None, str(e)
+
 # --- MAIN APP INTERFACE ---
 
 st.title("⚡ YouTube Market Intelligence Engine")
-st.write("Enter a topic. The engine will find the top channels, analyze their history, and identify the **Outlier Videos** (High Demand Topics).")
 
-topic_input = st.text_input("Enter a Topic", placeholder="e.g. Sustainable Living, Notion Setup, AI News")
-run_btn = st.button("🚀 Scan Market")
+# Create Tabs for different modes
+tab1, tab2 = st.tabs(["🔭 Deep Dive (Single)", "⚔️ Niche Battle (Compare)"])
 
-if run_btn:
-    if not api_key:
-        st.error("⚠️ Please paste your API Key in the sidebar to start.")
-    elif not topic_input:
-        st.warning("Please enter a topic.")
-    else:
-        # Create a status container
-        status = st.status("Starting Engine...", expanded=True)
-        
-        try:
-            yt = build('youtube', 'v3', developerKey=api_key)
-            
-            # Step 1: Find Channels
-            region_msg = f"in {selected_region_label}" if selected_region_code else "Worldwide"
-            status.write(f"📡 Identifying top {max_channels} English channels for '{topic_input}' ({region_msg})...")
-            
-            search_args = {
-                'part': "snippet",
-                'q': topic_input,
-                'type': "channel",
-                'maxResults': max_channels,
-                'order': "relevance",
-                'relevanceLanguage': "en" 
-            }
-            if selected_region_code:
-                search_args['regionCode'] = selected_region_code
+# ==========================================
+# TAB 1: VISUAL DASHBOARD (SINGLE)
+# ==========================================
+with tab1:
+    st.write("Deep dive into a single topic to find specific video ideas.")
+    col_search, col_btn = st.columns([4, 1])
+    topic_input = col_search.text_input("Enter Topic", placeholder="e.g. Ambient, Focus Music", label_visibility="collapsed", key="search_single")
+    run_btn = col_btn.button("🚀 Scan", type="primary", key="btn_single", use_container_width=True)
 
-            search_req = yt.search().list(**search_args)
-            search_res = search_req.execute()
-            channel_ids = [item['snippet']['channelId'] for item in search_res['items']]
-            
-            if not channel_ids:
-                status.update(label="No channels found.", state="error")
-                st.stop()
+    if run_btn:
+        if not api_key: st.error("⚠️ Please paste API Key in sidebar.")
+        elif not topic_input: st.warning("Enter a topic.")
+        else:
+            # Use spinner instead of status (Prevents the 'Click to Open' issue)
+            with st.spinner("Analyzing Market Data..."):
+                data, err = run_market_scan(topic_input, api_key, max_channels, videos_per_channel, outlier_multiplier, days_back, selected_region_code)
                 
-            # Step 2: Parallel Analysis
-            status.write(f"⚡ Scanning video performance data (Last {days_back} Days)...")
-            all_outliers = []
-            
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                futures = [
-                    executor.submit(process_channel_logic, api_key, cid, videos_per_channel, outlier_multiplier, days_back) 
-                    for cid in channel_ids
-                ]
-                
-                for future in concurrent.futures.as_completed(futures):
-                    result = future.result()
-                    if result:
-                        all_outliers.extend(result)
-            
-            status.update(label="Analysis Complete!", state="complete", expanded=False)
-            
-            # Step 3: Show Results
-            if all_outliers:
-                final_df = pd.DataFrame(all_outliers)
-                final_df['Competition'] = final_df['subs'].apply(assign_competition_level)
-                
-                # Filter News Spam
-                mask_news_spam = (final_df['Competition'] == "High (>1M)") & (final_df['views'] < 50000)
-                final_df = final_df[~mask_news_spam]
-                
-                # Sort & Diversity Filter
-                final_df = final_df.sort_values('performance', ascending=False)
-                final_df = final_df.groupby('channel').head(2).sort_values('performance', ascending=False)
-                
-                if final_df.empty:
-                    st.warning(f"No quality outliers found in the last {days_back} days.")
-                else:
-                    # Apply Decision Logic
-                    final_df['Verdict'] = final_df.apply(assign_verdict, axis=1)
-                    niche_score = calculate_niche_score(final_df, len(channel_ids))
-                    
-                    # --- NEW: DISPLAY NICHE HEALTH (WITH EXPANDER) ---
-                    st.divider()
-                    st.subheader("📊 Niche Health Report")
-                    
-                    c1, c2, c3 = st.columns(3)
-                    
-                    # Score Color Logic
-                    score_color = "red"
-                    if niche_score > 50: score_color = "orange"
-                    if niche_score > 75: score_color = "green"
-                    
-                    c1.markdown(f"### Niche Score: <span style='color:{score_color}'>{niche_score}/100</span>", unsafe_allow_html=True)
-                    
-                    # Dynamic Caption based on score
-                    if niche_score > 75:
-                        c1.caption("✅ **Excellent Opportunity.** High demand, low competition.")
-                    elif niche_score > 50:
-                        c1.caption("⚠️ **Moderate.** Good potential, but requires a unique angle.")
-                    else:
-                        c1.caption("❌ **Saturated.** Dominated by big channels.")
-
-                    c2.metric("Channels Scanned", len(channel_ids))
-                    c3.metric("Outliers Found", len(final_df))
-
-                    # --- INSTRUCTION MANUAL (EXPANDER) ---
-                    with st.expander("ℹ️ How to read this report (Legend & Score Math)"):
-                        st.markdown("""
-                        ### 1. The Verdict Legend
-                        * 💎 **Gold Mine:** A small channel (<100k subs) got massive views (>5x avg). **High Priority: Copy this topic.**
-                        * 🌟 **Rising Star:** A small channel performing consistently well. **Study their thumbnails & packaging.**
-                        * ✅ **Good Bet:** A medium-sized channel performing well. **Safe topic to cover.**
-                        * 🌊 **Mainstream Wave:** A large channel riding a trend. **Hard to compete unless you are fast.**
-                        * 🦈 **Shark Tank:** A giant channel (>1M subs) dominates this. **Avoid. Too much competition.**
-
-                        ### 2. How is the Score Calculated?
-                        The score starts at a baseline of **50**.
-                        * **+10 Points** for every "Gold Mine" found (Small channel winning).
-                        * **+2 Points** for every unit of Viral Multiplier (Intensity of demand).
-                        * **-5 Points** for every "Shark" dominating the results (Competition penalty).
-                        """)
-                    
-                    # --- TAG SPIDER (Keep existing) ---
-                    st.divider()
-                    st.subheader("🕸️ Discovered Niches (Common Tags)")
-                    
-                    all_tags = [tag.lower() for row in final_df['tags'] for tag in row]
-                    filtered_tags = [t for t in all_tags if topic_input.lower() not in t]
-                    
-                    if filtered_tags:
-                        common_tags = Counter(filtered_tags).most_common(12)
-                        cols = st.columns(4)
-                        for i, (tag, count) in enumerate(common_tags):
-                            cols[i % 4].markdown(f"<div class='tag-container'>{tag} ({count})</div>", unsafe_allow_html=True)
-                    else:
-                        st.caption("No unique tags found.")
-
-                    st.divider()
-                    
-                    # --- VISUALIZATION ---
-                    st.subheader(f"💎 The '{topic_input}' Gold Mine")
-                    st.caption("Look for Gold Mines (Low Comp, High Viral).")
-                    
-                    fig = px.scatter(
-                        final_df,
-                        x="published",
-                        y="performance",
-                        size="views",
-                        color="Verdict",
-                        hover_data=["title", "views", "channel"],
-                        title="Opportunity Landscape",
-                        labels={"performance": "Viral Multiplier", "published": "Date"},
-                        color_discrete_map={
-                            "💎 Gold Mine": "#00CC96",      # Green
-                            "🌟 Rising Star": "#636EFA",    # Blue
-                            "✅ Good Bet": "#AB63FA",       # Purple
-                            "🌊 Mainstream Wave": "#FFA15A", # Orange
-                            "🦈 Shark Tank (Avoid)": "#EF553B" # Red
-                        }
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-                    
-                    # --- TABLE ---
-                    st.subheader("📋 Ranked Opportunities")
-                    
-                    cols_to_show = ['Verdict', 'title', 'channel', 'views', 'performance', 'url']
-                    
-                    st.dataframe(
-                        final_df[cols_to_show],
-                        column_config={
-                            "url": st.column_config.LinkColumn("Watch"),
-                            "performance": st.column_config.NumberColumn("Multiplier", format="%.1fx"),
-                            "views": st.column_config.NumberColumn("Views", format="%d"),
-                            "Verdict": st.column_config.TextColumn("Verdict")
-                        },
-                        hide_index=True
-                    )
+            if err:
+                st.error(err)
             else:
-                st.warning("No outliers found. Try lowering the threshold or checking a broader topic.")
+                final_df = data['df']
+                niche_score = data['score']
+
+                # --- 1. DASHBOARD HEADER (GAUGE & METRICS) ---
+                st.divider()
+                col_gauge, col_stats = st.columns([1, 2])
                 
-        except Exception as e:
-            st.error(f"Error: {str(e)}")
+                with col_gauge:
+                    # Professional Gauge Chart
+                    st.plotly_chart(create_gauge_chart(niche_score), use_container_width=True)
+                
+                with col_stats:
+                    st.subheader("📊 Market Health Check")
+                    
+                    # CSS Grid for Strategy Cards (Fixed Colors)
+                    st.markdown(f"""
+                    <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px;">
+                        <!-- Gold Mine -->
+                        <div style="flex: 1; background-color: #e6f4ea; padding: 15px; border-radius: 10px; border-left: 5px solid #00cc96; color: #1f2937;">
+                            <h4 style="margin:0; color: #008000;">💎 Gold Mine</h4>
+                            <small><b>Small Channel + Huge Views.</b><br>High Priority: Copy Topic.</small>
+                        </div>
+                        
+                        <!-- Rising Star -->
+                        <div style="flex: 1; background-color: #e8f0fe; padding: 15px; border-radius: 10px; border-left: 5px solid #636efa; color: #1f2937;">
+                            <h4 style="margin:0; color: #1557b0;">🌟 Rising Star</h4>
+                            <small><b>Small Channel + Consistent.</b><br>Study their thumbnails.</small>
+                        </div>
+
+                        <!-- Mainstream Wave -->
+                        <div style="flex: 1; background-color: #fff8e1; padding: 15px; border-radius: 10px; border-left: 5px solid #ffa15a; color: #1f2937;">
+                            <h4 style="margin:0; color: #bf5b04;">🌊 Mainstream</h4>
+                            <small><b>Big Trend.</b><br>Hard to compete, but high traffic.</small>
+                        </div>
+                        
+                        <!-- Shark Tank -->
+                        <div style="flex: 1; background-color: #fce8e6; padding: 15px; border-radius: 10px; border-left: 5px solid #ef553b; color: #1f2937;">
+                            <h4 style="margin:0; color: #c5221f;">🦈 Shark Tank</h4>
+                            <small><b>Giant Channel Dominance.</b><br>Action: Avoid.</small>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    m1, m2, m3 = st.columns(3)
+                    m1.metric("Channels", data['channels'])
+                    m2.metric("Outliers", data['outliers'])
+                    m3.metric("Top Multiplier", f"{data['top_mult']:.1f}x")
+
+                # --- 2. TAG VISUALIZATION ---
+                st.divider()
+                all_tags = [tag.lower() for row in final_df['tags'] for tag in row]
+                tag_chart = create_tag_chart(all_tags, topic_input)
+                if tag_chart:
+                    st.plotly_chart(tag_chart, use_container_width=True)
+                else:
+                    st.info("No hidden tags found in the top videos.")
+
+                # --- 3. SCATTER PLOT ---
+                st.divider()
+                st.subheader(f"💎 Opportunity Map: '{topic_input}'")
+                fig = px.scatter(
+                    final_df, x="published", y="performance", size="views", color="Verdict",
+                    hover_data=["title", "channel"],
+                    labels={"performance": "Viral Multiplier", "published": "Upload Date"},
+                    color_discrete_map={"💎 Gold Mine": "#00CC96", "🌟 Rising Star": "#636EFA", "✅ Good Bet": "#AB63FA", "🌊 Mainstream Wave": "#FFA15A", "🦈 Shark Tank (Avoid)": "#EF553B"}
+                )
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # --- 4. ACTIONABLE TABLE (With Tooltips) ---
+                st.subheader("📋 Ranked Video List")
+                st.dataframe(
+                    final_df[['Verdict', 'title', 'channel', 'views', 'performance', 'url']], 
+                    hide_index=True, 
+                    column_config={
+                        "url": st.column_config.LinkColumn("Link"), 
+                        "title": st.column_config.TextColumn("Video Title", width="large"),
+                        "views": st.column_config.NumberColumn("Views", help="Total views this video has received."),
+                        "performance": st.column_config.ProgressColumn(
+                            "Viral Power", 
+                            format="%.1f x", 
+                            min_value=0, 
+                            max_value=10,
+                            help="How many times BETTER this video did compared to the channel's average. 10x means it got 1000% more views than normal. Higher is better."
+                        ),
+                        "Verdict": st.column_config.TextColumn(
+                            "Verdict", 
+                            width="medium",
+                            help="Gold Mine = Best Opportunity. Shark Tank = High Competition."
+                        ),
+                    }
+                )
+
+# ==========================================
+# TAB 2: VISUAL BATTLE (COMPARE)
+# ==========================================
+with tab2:
+    st.write("Compare two topics head-to-head to see which is the better opportunity.")
+    col1, col2 = st.columns(2)
+    t1 = col1.text_input("Topic A", placeholder="Stoicism", key="topic_a")
+    t2 = col2.text_input("Topic B", placeholder="Ambient", key="topic_b")
+    
+    fight_btn = st.button("⚔️ Start Battle", key="btn_fight", type="primary")
+    
+    if fight_btn:
+        if not api_key or not t1 or not t2:
+            st.error("Please enter API Key and both topics.")
+        else:
+            status = st.status("Running Niche Battle...", expanded=True)
+            res1, err1 = run_market_scan(t1, api_key, max_channels, videos_per_channel, outlier_multiplier, days_back, selected_region_code)
+            res2, err2 = run_market_scan(t2, api_key, max_channels, videos_per_channel, outlier_multiplier, days_back, selected_region_code)
+            status.update(label="Battle Complete!", state="complete", expanded=False)
+            
+            if err1 or err2:
+                st.error(f"Error: {err1 or err2}")
+            else:
+                # --- WINNER BANNER ---
+                if res1['score'] > res2['score']:
+                    winner = t1
+                    diff = res1['score'] - res2['score']
+                else:
+                    winner = t2
+                    diff = res2['score'] - res1['score']
+                
+                st.markdown(f"""
+                <div style="background: linear-gradient(90deg, #1e3a8a 0%, #3b82f6 100%); padding: 20px; border-radius: 10px; color: white; text-align: center; margin-bottom: 30px;">
+                    <h2 style="margin:0;">🏆 Winner: {winner}</h2>
+                    <p style="margin:0; opacity: 0.9;">Better Opportunity Score (+{diff} points)</p>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # --- COMPARISON CHARTS ---
+                c_chart, c_metrics = st.columns([2, 1])
+                
+                with c_chart:
+                    # Side by Side Bar Chart
+                    comp_data = pd.DataFrame({
+                        'Topic': [t1, t1, t1, t2, t2, t2],
+                        'Metric': ['Score', 'Outliers', 'Viral Max', 'Score', 'Outliers', 'Viral Max'],
+                        'Value': [res1['score'], res1['outliers'], res1['top_mult'], res2['score'], res2['outliers'], res2['top_mult']]
+                    })
+                    fig_comp = px.bar(comp_data, x="Metric", y="Value", color="Topic", barmode="group", title="Head-to-Head Stats", text_auto=True)
+                    st.plotly_chart(fig_comp, use_container_width=True)
+                
+                with c_metrics:
+                    st.subheader("Key Stats")
+                    st.metric(f"{t1} Score", res1['score'])
+                    st.metric(f"{t2} Score", res2['score'])
+                    st.caption(f"viral max x10 for scale")
