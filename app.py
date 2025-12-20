@@ -27,6 +27,21 @@ with st.sidebar:
     api_key = st.text_input("Paste YouTube API Key", type="password", help="Get this from Google Cloud Console")
     
     st.divider()
+
+    # --- NEW: Region Selector ---
+    st.subheader("🌍 Region Filter")
+    region_options = {
+        "Worldwide (English Focus)": None,
+        "United States": "US",
+        "United Kingdom": "GB",
+        "Canada": "CA",
+        "Australia": "AU",
+        "India": "IN"
+    }
+    selected_region_label = st.selectbox("Target Region", options=list(region_options.keys()), index=0)
+    selected_region_code = region_options[selected_region_label]
+    
+    st.divider()
     
     max_channels = st.slider("Channels to Scan", 3, 10, 5, help="How many top channels to analyze?")
     videos_per_channel = st.slider("Videos per Channel", 10, 50, 30, help="How far back to look?")
@@ -35,6 +50,13 @@ with st.sidebar:
     st.info("💡 **Tip:** Higher 'Channels to Scan' takes longer. 5 is a good balance.")
 
 # --- HELPER FUNCTIONS ---
+
+# --- NEW: Competition Logic ---
+def assign_competition_level(subs):
+    """Classifies competition based on subscriber count."""
+    if subs < 100000: return "Very Low (<100k)"
+    if subs < 1000000: return "Medium (<1M)"
+    return "High (>1M)"
 
 def get_channel_basics(youtube, channel_id):
     """Fetches basic channel info and the Uploads Playlist ID."""
@@ -107,6 +129,10 @@ def process_channel_logic(api_key, channel_id, v_limit, threshold_mult):
         
         # 3. Calculate Math
         df = pd.DataFrame(videos)
+        
+        # --- IMPORTANT: Attach Subscriber count to DataFrame for later coloring ---
+        df['subs'] = info['subs']
+        
         median_views = df['views'].median()
         if median_views == 0: median_views = 1
         
@@ -144,15 +170,26 @@ if run_btn:
         try:
             yt = build('youtube', 'v3', developerKey=api_key)
             
-            # Step 1: Find Channels
-            status.write(f"📡 Identifying top {max_channels} channels for '{topic_input}'...")
-            search_req = yt.search().list(
-                part="snippet", 
-                q=topic_input, 
-                type="channel", 
-                maxResults=max_channels, 
-                order="relevance"
-            )
+            # Step 1: Find Channels (WITH NEW FILTERS)
+            region_msg = f"in {selected_region_label}" if selected_region_code else "Worldwide"
+            status.write(f"📡 Identifying top {max_channels} English channels for '{topic_input}' ({region_msg})...")
+            
+            # Build search arguments
+            search_args = {
+                'part': "snippet",
+                'q': topic_input,
+                'type': "channel",
+                'maxResults': max_channels,
+                'order': "relevance",
+                'relevanceLanguage': "en"  # <--- Forces English results
+            }
+            
+            # Only add regionCode if user selected a specific country (Not Worldwide)
+            if selected_region_code:
+                search_args['regionCode'] = selected_region_code
+
+            search_req = yt.search().list(**search_args)
+            
             search_res = search_req.execute()
             channel_ids = [item['snippet']['channelId'] for item in search_res['items']]
             
@@ -182,6 +219,9 @@ if run_btn:
             if all_outliers:
                 final_df = pd.DataFrame(all_outliers).sort_values('performance', ascending=False)
                 
+                # --- NEW: Assign Competition Level ---
+                final_df['Competition'] = final_df['subs'].apply(assign_competition_level)
+                
                 st.divider()
                 
                 # Top Level Metrics
@@ -190,24 +230,30 @@ if run_btn:
                 m2.metric("Outliers Found", len(final_df))
                 m3.metric("Top Multiplier", f"{final_df['performance'].max():.1f}x")
                 
-                # Scatter Plot
+                # --- NEW: Updated Scatter Plot ---
                 st.subheader(f"💎 The '{topic_input}' Gold Mine")
+                
                 fig = px.scatter(
                     final_df,
                     x="published",
                     y="performance",
                     size="views",
-                    color="channel",
-                    hover_data=["title", "views"],
-                    title="Outlier Intensity (Higher = More Viral)",
-                    labels={"performance": "Viral Multiplier (x Average)", "published": "Date"}
+                    color="Competition",  # <--- CHANGED: Colors dots by Competition Level
+                    hover_data=["title", "views", "channel"],
+                    title="Outlier Intensity vs Competition Level",
+                    labels={"performance": "Viral Multiplier (x Average)", "published": "Date"},
+                    color_discrete_map={  # <--- NEW: Sets specific colors
+                        "Very Low (<100k)": "#00CC96",  # Green
+                        "Medium (<1M)": "#636EFA",      # Blue
+                        "High (>1M)": "#EF553B"         # Red
+                    }
                 )
                 st.plotly_chart(fig, use_container_width=True)
                 
                 # Detailed Table
                 st.subheader("📋 Top Opportunities List")
                 st.dataframe(
-                    final_df[['title', 'channel', 'views', 'performance', 'url']],
+                    final_df[['title', 'channel', 'Competition', 'views', 'performance', 'url']],
                     column_config={
                         "url": st.column_config.LinkColumn("Watch Video"),
                         "performance": st.column_config.NumberColumn("Multiplier", format="%.1fx"),
