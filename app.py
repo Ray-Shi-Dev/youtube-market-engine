@@ -32,7 +32,7 @@ st.markdown("""
         box-shadow: 0 1px 3px rgba(0,0,0,0.05);
     }
 
-    /* NEW: Verdict Colors */
+    /* Verdict Colors */
     .verdict-gold { color: #008000; font-weight: bold; }
     .verdict-star { color: #DAA520; font-weight: bold; }
     .verdict-shark { color: #B22222; font-weight: bold; }
@@ -71,7 +71,7 @@ with st.sidebar:
     st.divider()
     days_back = st.slider("Look Back Period (Days)", 30, 365, 90, help="90 for Trends, 365 for Evergreen")
     
-    st.info("💡 **Tip:** Use the 'Niche Health' score below to validate your idea!")
+    st.info("💡 **Tip:** Check the 'How to read this report' section below for help!")
 
 # --- HELPER FUNCTIONS ---
 
@@ -82,7 +82,7 @@ def assign_competition_level(subs):
     return "High (>1M)"
 
 def assign_verdict(row):
-    """NEW: Automatically classifies the opportunity type."""
+    """Automatically classifies the opportunity type."""
     comp = row['Competition']
     perf = row['performance']
     
@@ -97,7 +97,7 @@ def assign_verdict(row):
         return "🦈 Shark Tank (Avoid)"
 
 def calculate_niche_score(df, total_channels):
-    """NEW: Calculates a 0-100 score for the niche."""
+    """Calculates a 0-100 score for the niche."""
     # Base score
     score = 50 
     
@@ -278,7 +278,7 @@ if run_btn:
             
             status.update(label="Analysis Complete!", state="complete", expanded=False)
             
-            # Step 3: Show Results (DECISION ENGINE UPDATE)
+            # Step 3: Show Results
             if all_outliers:
                 final_df = pd.DataFrame(all_outliers)
                 final_df['Competition'] = final_df['subs'].apply(assign_competition_level)
@@ -294,11 +294,11 @@ if run_btn:
                 if final_df.empty:
                     st.warning(f"No quality outliers found in the last {days_back} days.")
                 else:
-                    # --- NEW: APPLY DECISION LOGIC ---
+                    # Apply Decision Logic
                     final_df['Verdict'] = final_df.apply(assign_verdict, axis=1)
                     niche_score = calculate_niche_score(final_df, len(channel_ids))
                     
-                    # --- NEW: DISPLAY NICHE HEALTH ---
+                    # --- NEW: DISPLAY NICHE HEALTH (WITH EXPANDER) ---
                     st.divider()
                     st.subheader("📊 Niche Health Report")
                     
@@ -310,15 +310,34 @@ if run_btn:
                     if niche_score > 75: score_color = "green"
                     
                     c1.markdown(f"### Niche Score: <span style='color:{score_color}'>{niche_score}/100</span>", unsafe_allow_html=True)
+                    
+                    # Dynamic Caption based on score
                     if niche_score > 75:
-                        c1.caption("✅ Excellent opportunity. Lots of Green Dots.")
+                        c1.caption("✅ **Excellent Opportunity.** High demand, low competition.")
                     elif niche_score > 50:
-                        c1.caption("⚠️ Good potential, specific angles needed.")
+                        c1.caption("⚠️ **Moderate.** Good potential, but requires a unique angle.")
                     else:
-                        c1.caption("❌ High competition / Low viral interest.")
+                        c1.caption("❌ **Saturated.** Dominated by big channels.")
 
                     c2.metric("Channels Scanned", len(channel_ids))
                     c3.metric("Outliers Found", len(final_df))
+
+                    # --- INSTRUCTION MANUAL (EXPANDER) ---
+                    with st.expander("ℹ️ How to read this report (Legend & Score Math)"):
+                        st.markdown("""
+                        ### 1. The Verdict Legend
+                        * 💎 **Gold Mine:** A small channel (<100k subs) got massive views (>5x avg). **High Priority: Copy this topic.**
+                        * 🌟 **Rising Star:** A small channel performing consistently well. **Study their thumbnails & packaging.**
+                        * ✅ **Good Bet:** A medium-sized channel performing well. **Safe topic to cover.**
+                        * 🌊 **Mainstream Wave:** A large channel riding a trend. **Hard to compete unless you are fast.**
+                        * 🦈 **Shark Tank:** A giant channel (>1M subs) dominates this. **Avoid. Too much competition.**
+
+                        ### 2. How is the Score Calculated?
+                        The score starts at a baseline of **50**.
+                        * **+10 Points** for every "Gold Mine" found (Small channel winning).
+                        * **+2 Points** for every unit of Viral Multiplier (Intensity of demand).
+                        * **-5 Points** for every "Shark" dominating the results (Competition penalty).
+                        """)
                     
                     # --- TAG SPIDER (Keep existing) ---
                     st.divider()
@@ -337,7 +356,7 @@ if run_btn:
 
                     st.divider()
                     
-                    # --- VISUALIZATION (Updated Colors) ---
+                    # --- VISUALIZATION ---
                     st.subheader(f"💎 The '{topic_input}' Gold Mine")
                     st.caption("Look for Gold Mines (Low Comp, High Viral).")
                     
@@ -346,7 +365,7 @@ if run_btn:
                         x="published",
                         y="performance",
                         size="views",
-                        color="Verdict", # <--- UPDATED: Colors by Verdict
+                        color="Verdict",
                         hover_data=["title", "views", "channel"],
                         title="Opportunity Landscape",
                         labels={"performance": "Viral Multiplier", "published": "Date"},
@@ -360,10 +379,9 @@ if run_btn:
                     )
                     st.plotly_chart(fig, use_container_width=True)
                     
-                    # --- TABLE (Updated Columns) ---
+                    # --- TABLE ---
                     st.subheader("📋 Ranked Opportunities")
                     
-                    # Move Verdict to front of table
                     cols_to_show = ['Verdict', 'title', 'channel', 'views', 'performance', 'url']
                     
                     st.dataframe(
