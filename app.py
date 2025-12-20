@@ -343,8 +343,8 @@ def run_market_scan(topic, api_key, max_ch, vid_limit, mult, days, region_code):
             "channels": len(channel_ids),
             "outliers": len(df),
             "top_mult": df['performance'].max() if not df.empty else 0,
-            "median_mult": df['performance'].median() if not df.empty else 0, # <--- NEW
-            "shark_count": len(df[df['Verdict'].str.contains("Shark", na=False)]) # <--- NEW
+            "median_mult": df['performance'].median() if not df.empty else 0,
+            "shark_count": len(df[df['Verdict'].str.contains("Shark", na=False)])
         }, None
 
     except Exception as e:
@@ -395,6 +395,31 @@ with tab1:
                     m1.metric("Channels Scanned", data['channels'])
                     m2.metric("Outliers Found", data['outliers'])
                     m3.metric("Top Multiplier", f"{data['top_mult']:.1f}x")
+
+                # --- NEW: SCORE EXPLANATION EXPANDER ---
+                st.write("") 
+                with st.expander("ℹ️ How is this score calculated? (The Math)"):
+                    st.markdown("""
+                    ### 🧮 The Niche Logic
+                    This score (0-100) predicts the **probability of success for a new/small channel**. It is not just random; it uses a logarithmic formula similar to tools like VidIQ.
+                    
+                    #### 1. The "Gold Mine" Bonus (+ Points)
+                    * We count how many **Small Channels (<100k subs)** are currently going viral in this topic.
+                    * **Logic:** If small players are winning, the barrier to entry is low.
+                    
+                    #### 2. The "Viral Intensity" Boost (+ Points)
+                    * We measure the **Average Multiplier** of the top videos.
+                    * **Logic:** If the average video gets 10x its normal views, audience demand is explosive.
+                    
+                    #### 3. The "Shark" Penalty (- Points)
+                    * We calculate the percentage of **Giant Channels (>1M subs)** in the results.
+                    * **Logic:** If 80% of the results are sharks, we penalize the score because it's hard to compete.
+                    
+                    ### 🚦 Score Key
+                    * **80-100 (Green):** **Unsaturated.** High demand, low supply. Attack this immediately.
+                    * **50-79 (Orange):** **Competitive.** You can win, but you need a specific angle or better packaging than average.
+                    * **0-49 (Red):** **Saturated.** Dominated by giants. Hard to grow here without a massive budget.
+                    """)
 
                 # --- 2. STRATEGY LEGEND (NATIVE STREAMLIT FIX) ---
                 st.divider()
