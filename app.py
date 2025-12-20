@@ -4,7 +4,7 @@ import plotly.express as px
 from googleapiclient.discovery import build
 import concurrent.futures
 from datetime import datetime, timedelta
-from collections import Counter # --- NEW: Required for Tag Spider
+from collections import Counter
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
@@ -21,6 +21,7 @@ st.markdown("""
     /* NEW: Tag Spider Chip Styling */
     .tag-container {
         background-color: #ffffff;
+        color: #333333; /* <--- FIX: Force text color to dark grey for visibility */
         padding: 8px 12px;
         border-radius: 20px;
         text-align: center;
@@ -60,7 +61,7 @@ with st.sidebar:
     videos_per_channel = st.slider("Videos per Channel", 10, 50, 30, help="How far back to look?")
     outlier_multiplier = st.slider("Outlier Threshold", 1.5, 5.0, 3.0, step=0.5, help="3.0 means 3x higher views than average")
     
-    # --- NEW: Date Filter Slider ---
+    # --- Date Filter Slider ---
     st.divider()
     days_back = st.slider("Look Back Period (Days)", 30, 365, 90, help="90 for Trends, 365 for Evergreen")
     
@@ -93,7 +94,6 @@ def get_channel_basics(youtube, channel_id):
     except:
         return None
 
-# --- UPDATED: Accepts days_back & Captures Tags ---
 def get_videos(youtube, playlist_id, limit, days_back):
     """Fetches video statistics from the uploads playlist, filtering by date and getting tags."""
     videos = []
@@ -130,14 +130,13 @@ def get_videos(youtube, playlist_id, limit, days_back):
                 'published': item['snippet']['publishedAt'],
                 'views': int(item['statistics'].get('viewCount', 0)),
                 'channel': item['snippet']['channelTitle'],
-                'tags': item['snippet'].get('tags', []), # <--- NEW: Capture Tags
+                'tags': item['snippet'].get('tags', []),
                 'url': f"https://www.youtube.com/watch?v={item['id']}"
             })
     except:
         pass
     return videos
 
-# --- UPDATED: Accepts days_back ---
 def process_channel_logic(api_key, channel_id, v_limit, threshold_mult, days_back):
     """
     The 'Worker' function. 
@@ -226,7 +225,6 @@ if run_btn:
             all_outliers = []
             
             with concurrent.futures.ThreadPoolExecutor() as executor:
-                # --- UPDATED: Pass days_back to the worker ---
                 futures = [
                     executor.submit(process_channel_logic, api_key, cid, videos_per_channel, outlier_multiplier, days_back) 
                     for cid in channel_ids
@@ -264,7 +262,7 @@ if run_btn:
                     st.warning(f"No outliers found in the last {days_back} days. Try increasing the Look Back Period or lowering the threshold.")
                 else:
                     
-                    # --- NEW FEATURE: TAG SPIDER 🕷️ ---
+                    # --- TAG SPIDER 🕷️ ---
                     st.divider()
                     st.subheader("🕸️ Discovered Niches (Common Tags)")
                     st.write("The outliers above are using these specific tags. **Try searching these next:**")
