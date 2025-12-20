@@ -28,7 +28,7 @@ with st.sidebar:
     
     st.divider()
 
-    # --- NEW: Region Selector ---
+    # --- Region Selector ---
     st.subheader("🌍 Region Filter")
     region_options = {
         "Worldwide (English Focus)": None,
@@ -51,7 +51,6 @@ with st.sidebar:
 
 # --- HELPER FUNCTIONS ---
 
-# --- NEW: Competition Logic ---
 def assign_competition_level(subs):
     """Classifies competition based on subscriber count."""
     if subs < 100000: return "Very Low (<100k)"
@@ -130,7 +129,7 @@ def process_channel_logic(api_key, channel_id, v_limit, threshold_mult):
         # 3. Calculate Math
         df = pd.DataFrame(videos)
         
-        # --- IMPORTANT: Attach Subscriber count to DataFrame for later coloring ---
+        # Attach Subscriber count to DataFrame
         df['subs'] = info['subs']
         
         median_views = df['views'].median()
@@ -146,7 +145,7 @@ def process_channel_logic(api_key, channel_id, v_limit, threshold_mult):
             return outliers.to_dict('records')
             
     except Exception:
-        return [] # Return empty if channel fails (keeps engine running)
+        return [] 
         
     return []
 
@@ -170,26 +169,22 @@ if run_btn:
         try:
             yt = build('youtube', 'v3', developerKey=api_key)
             
-            # Step 1: Find Channels (WITH NEW FILTERS)
+            # Step 1: Find Channels
             region_msg = f"in {selected_region_label}" if selected_region_code else "Worldwide"
             status.write(f"📡 Identifying top {max_channels} English channels for '{topic_input}' ({region_msg})...")
             
-            # Build search arguments
             search_args = {
                 'part': "snippet",
                 'q': topic_input,
                 'type': "channel",
                 'maxResults': max_channels,
                 'order': "relevance",
-                'relevanceLanguage': "en"  # <--- Forces English results
+                'relevanceLanguage': "en" 
             }
-            
-            # Only add regionCode if user selected a specific country (Not Worldwide)
             if selected_region_code:
                 search_args['regionCode'] = selected_region_code
 
             search_req = yt.search().list(**search_args)
-            
             search_res = search_req.execute()
             channel_ids = [item['snippet']['channelId'] for item in search_res['items']]
             
@@ -201,7 +196,6 @@ if run_btn:
             status.write("⚡ Scanning video performance data (Parallel Processing)...")
             all_outliers = []
             
-            # This creates a 'pool' of workers to check multiple channels at once
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 futures = [
                     executor.submit(process_channel_logic, api_key, cid, videos_per_channel, outlier_multiplier) 
@@ -217,50 +211,68 @@ if run_btn:
             
             # Step 3: Show Results
             if all_outliers:
-                final_df = pd.DataFrame(all_outliers).sort_values('performance', ascending=False)
+                final_df = pd.DataFrame(all_outliers)
                 
-                # --- NEW: Assign Competition Level ---
+                # Apply Competition Logic
                 final_df['Competition'] = final_df['subs'].apply(assign_competition_level)
                 
-                st.divider()
+                # --- NEW FIX: FILTERING LOGIC ---
                 
-                # Top Level Metrics
-                m1, m2, m3 = st.columns(3)
-                m1.metric("Channels Analyzed", len(channel_ids))
-                m2.metric("Outliers Found", len(final_df))
-                m3.metric("Top Multiplier", f"{final_df['performance'].max():.1f}x")
+                # 1. Remove "News Spam": If High Competition, require > 50k views
+                # This removes Yahoo Finance videos with 16k views that look like outliers
+                mask_news_spam = (final_df['Competition'] == "High (>1M)") & (final_df['views'] < 50000)
+                final_df = final_df[~mask_news_spam]
                 
-                # --- NEW: Updated Scatter Plot ---
-                st.subheader(f"💎 The '{topic_input}' Gold Mine")
+                # 2. Sort by Performance
+                final_df = final_df.sort_values('performance', ascending=False)
                 
-                fig = px.scatter(
-                    final_df,
-                    x="published",
-                    y="performance",
-                    size="views",
-                    color="Competition",  # <--- CHANGED: Colors dots by Competition Level
-                    hover_data=["title", "views", "channel"],
-                    title="Outlier Intensity vs Competition Level",
-                    labels={"performance": "Viral Multiplier (x Average)", "published": "Date"},
-                    color_discrete_map={  # <--- NEW: Sets specific colors
-                        "Very Low (<100k)": "#00CC96",  # Green
-                        "Medium (<1M)": "#636EFA",      # Blue
-                        "High (>1M)": "#EF553B"         # Red
-                    }
-                )
-                st.plotly_chart(fig, use_container_width=True)
+                # 3. Apply "Diversity Filter": Keep only top 2 videos per channel
+                final_df = final_df.groupby('channel').head(2).sort_values('performance', ascending=False)
                 
-                # Detailed Table
-                st.subheader("📋 Top Opportunities List")
-                st.dataframe(
-                    final_df[['title', 'channel', 'Competition', 'views', 'performance', 'url']],
-                    column_config={
-                        "url": st.column_config.LinkColumn("Watch Video"),
-                        "performance": st.column_config.NumberColumn("Multiplier", format="%.1fx"),
-                        "views": st.column_config.NumberColumn("Views", format="%d")
-                    },
-                    hide_index=True
-                )
+                # -------------------------------
+                
+                if final_df.empty:
+                    st.warning("No outliers found after filtering for quality (Spam filter active).")
+                else:
+                    st.divider()
+                    
+                    # Top Level Metrics
+                    m1, m2, m3 = st.columns(3)
+                    m1.metric("Channels Analyzed", len(channel_ids))
+                    m2.metric("Outliers Found", len(final_df))
+                    m3.metric("Top Multiplier", f"{final_df['performance'].max():.1f}x")
+                    
+                    # Scatter Plot
+                    st.subheader(f"💎 The '{topic_input}' Gold Mine")
+                    
+                    fig = px.scatter(
+                        final_df,
+                        x="published",
+                        y="performance",
+                        size="views",
+                        color="Competition",
+                        hover_data=["title", "views", "channel"],
+                        title="Outlier Intensity vs Competition Level",
+                        labels={"performance": "Viral Multiplier (x Average)", "published": "Date"},
+                        color_discrete_map={
+                            "Very Low (<100k)": "#00CC96",
+                            "Medium (<1M)": "#636EFA",
+                            "High (>1M)": "#EF553B"
+                        }
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Detailed Table
+                    st.subheader("📋 Top Opportunities List")
+                    st.dataframe(
+                        final_df[['title', 'channel', 'Competition', 'views', 'performance', 'url']],
+                        column_config={
+                            "url": st.column_config.LinkColumn("Watch Video"),
+                            "performance": st.column_config.NumberColumn("Multiplier", format="%.1fx"),
+                            "views": st.column_config.NumberColumn("Views", format="%d")
+                        },
+                        hide_index=True
+                    )
             else:
                 st.warning("No outliers found. Try lowering the threshold or checking a broader topic.")
                 
