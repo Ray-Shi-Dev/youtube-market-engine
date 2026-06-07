@@ -10,14 +10,14 @@ Content creators and digital marketers often rely on intuition to pick topics, l
 
 This project demonstrates a full-stack data science workflow, from data extraction to interactive visualization.
 
-*   **Asynchronous Data Engineering:** Utilizes Python's `concurrent.futures.ThreadPoolExecutor` to perform parallel API calls across multiple channels simultaneously, drastically reducing data ingestion latency.
-*   **Outlier Detection:** Rather than looking at raw views, the engine calculates a `Viral Multiplier`. It isolates videos performing statistically higher than their own channel's median baseline to identify true market demand independent of subscriber count.
+* **Asynchronous Data Engineering:** Utilizes Python's `concurrent.futures.ThreadPoolExecutor` to perform parallel API calls across multiple channels simultaneously, drastically reducing data ingestion latency.
+* **Outlier Detection:** Rather than looking at raw views, the engine calculates a `Viral Multiplier`. It isolates videos performing statistically higher than their own channel's median baseline to identify true market demand independent of subscriber count.
     $$Viral\_Multiplier = \frac{Views_{Video}}{Median(Views_{Channel})}$$
-*   **Algorithmic Niche Scoring (0-100):** A custom mathematical model evaluates market viability based on three vectors:
+* **Algorithmic Niche Scoring (0-100):** A custom mathematical model evaluates market viability based on three vectors:
     1.  **Market Depth:** Rewards topics with a high volume of identified outliers.
     2.  **Viral Intensity:** Rewards topics where the median multiplier of top videos is exceptionally high.
     3.  **Saturation Penalty:** Applies a weighted reduction factor if >50% of the market share is held by "Sharks" (channels with >1M subscribers).
-*   **Exploratory Data Analysis (EDA) UI:** Leverages `Plotly` to generate interactive scatter plots, categorical gauge charts, and keyword frequency horizontal bar charts for immediate visual insights.
+* **Exploratory Data Analysis (EDA) UI:** Leverages `Plotly` to generate interactive scatter plots, categorical gauge charts, and keyword frequency horizontal bar charts for immediate visual insights.
 
 ## 📊 System Architecture
 
