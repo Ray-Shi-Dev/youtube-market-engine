@@ -86,11 +86,17 @@ streamlit run app.py
 
 ## 📸 Application Gallery
 
-*(Insert screenshots of your application here)*
+### 1. Deep Dive Dashboard (Market Health & Scoring)
+![Deep Dive Dashboard](image_5b0523.png)
 
-*   `![Deep Dive Dashboard](link-to-image.png)`
-*   `![Opportunity Scatter Plot](link-to-image.png)`
-*   `![A/B Niche Battle](link-to-image.png)`
+### 2. Opportunity Map & Ranked Data
+![Opportunity Map](image_5b0502.jpg)
+
+### 3. Tag Spider (Hidden Keyword Extraction)
+![Tag Spider](image_5b051e.png)
+
+### 4. A/B Niche Battle Engine
+![Niche Battle](image_5b04e2.png)
 
 ## 📦 Dependencies
 *   `streamlit`
