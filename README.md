@@ -1,5 +1,7 @@
 # ⚡ YouTube Market Intelligence Engine
 
+> Project write-up with the method and results: **[ray-shi-dev.github.io/work/youtube-market-engine](https://ray-shi-dev.github.io/work/youtube-market-engine/)**
+
 An interactive, Python-based data product designed to analyze YouTube market saturation, detect viral outliers, and algorithmically score niche viability. Built with Streamlit, Pandas, and the YouTube Data API v3, this tool transforms raw video statistics into actionable market intelligence.
 
 ## 🚀 Overview
